@@ -1,0 +1,13 @@
+# Ignore the virtual environment
+venv/
+env/
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+
+# Ignore secret keys and Google credentials
+client_secrets.json
+token.json
+.env
+API_KEYS.txt
