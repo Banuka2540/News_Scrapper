@@ -3,22 +3,22 @@ import requests
 import time
 import re
 from bs4 import BeautifulSoup
-import google.generativeai as genai
+from google import genai # --- NEW GOOGLE AI LIBRARY ---
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 # --- CONFIGURATION ---
-RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
-BLOG_ID = os.environ.get("BLOG_ID")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+RAPIDAPI_KEY = "95be6b90f9msh643ba3b6db91b6bp177b0djsn28f5d2180410"
+BLOG_ID = "6489684370414144848"
+GEMINI_API_KEY = "AIzaSyBC8BwjP33Y077TPKU5uXCCubqx-I8i4Fw"
 
 if not all([RAPIDAPI_KEY, BLOG_ID, GEMINI_API_KEY]):
     raise ValueError("Missing one or more API keys in environment variables!")
 
 SCOPES = ['https://www.googleapis.com/auth/blogger']
 
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-2.5-flash')
+# Initialize the new Gemini Client
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 def fetch_sri_lankan_news():
     """Fetches the top news links from RapidAPI."""
@@ -47,31 +47,38 @@ def get_already_published_urls(service):
             if match:
                 published_urls.add(match.group(1))
         
-        print(f"   -> Found {len(published_urls)} articles we already published.")
         return published_urls
     except Exception as e:
         print(f"   -> Error reading past posts: {e}")
         return published_urls
 
-def scrape_full_article(url):
-    """Visits the news URL and scrapes the text."""
+def scrape_full_article_and_hd_image(url):
+    """Visits the news URL, scrapes the text AND the High-Def image."""
     try:
         if not url.startswith("http"):
             url = "https://www.adaderana.lk/" + url.lstrip("/")
         page = requests.get(url)
         soup = BeautifulSoup(page.content, 'html.parser')
+        
+        # 1. Get the full text
         paragraphs = soup.find_all('p')
         full_text = " ".join([p.get_text() for p in paragraphs])
-        if len(full_text) < 100: return None
-        return full_text
+        if len(full_text) < 100: 
+            return None, None
+            
+        # 2. Grab the HD image from the hidden Open Graph meta tags
+        hd_image_url = ""
+        meta_image = soup.find("meta", property="og:image")
+        if meta_image:
+            hd_image_url = meta_image.get("content", "")
+            
+        return full_text, hd_image_url
     except Exception as e:
-        return None
+        return None, None
 
 def rewrite_with_gemini_in_sinhala(original_text):
     """Asks Gemini to rewrite the text into a fresh HTML blog post in Sinhala."""
     print("   -> Translating and rewriting article into Sinhala...")
-    
-    # We explicitly tell Gemini to output the headline and body in Sinhala
     prompt = f"""
     You are an expert Sri Lankan news blogger. Read the following English news article and rewrite it completely in fluent, professional Sinhala. 
     1. Create a brand new, catchy headline in Sinhala, wrapped in <h1> tags.
@@ -80,10 +87,16 @@ def rewrite_with_gemini_in_sinhala(original_text):
     Text to translate and rewrite: {original_text}
     """
     try:
-        response = model.generate_content(prompt)
+        # --- NEW MODEL AND SYNTAX ---
+        response = client.models.generate_content(
+            model='gemini-2.5-flash-lite',
+            contents=prompt
+        )
         html_output = response.text.strip()
         if html_output.startswith("```html"):
             html_output = html_output[7:-3]
+        elif html_output.startswith("```"):
+            html_output = html_output[3:-3]
         return html_output
     except Exception as e:
         print(f"   -> Gemini Error: {e}")
@@ -111,6 +124,7 @@ if __name__ == "__main__":
         
         for index, article in enumerate(articles[:5]):
             original_url = article.get('source')
+            api_thumbnail_url = article.get('image', '')
             
             if original_url in published_urls:
                 print(f"\n--- Skipping: We already published this news! ---")
@@ -118,20 +132,24 @@ if __name__ == "__main__":
                 
             print(f"\n--- Processing New Article ---")
             
-            full_text = scrape_full_article(original_url)
+            full_text, hd_image_url = scrape_full_article_and_hd_image(original_url)
+            
             if not full_text:
                 continue
             
-            # Rewrite and translate
             rewritten_html = rewrite_with_gemini_in_sinhala(full_text)
             if not rewritten_html:
                 continue
                 
-            # Add our invisible tracking tag to the bottom
+            best_image_url = hd_image_url if hd_image_url else api_thumbnail_url
+                
+            if best_image_url:
+                image_tag = f'<img src="{best_image_url}" style="width: 100%; max-width: 800px; height: auto; object-fit: cover; border-radius:8px; margin-bottom: 20px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);" alt="News image"/>\n'
+                rewritten_html = rewritten_html.replace("</h1>", f"</h1>\n{image_tag}")
+                
             tracking_tag = f'\n<span style="display:none;" data-source="{original_url}"></span>'
             final_content = rewritten_html + tracking_tag
             
-            # Extract Title (which will now be in Sinhala)
             post_title = "Latest News Update"
             if "<h1>" in final_content and "</h1>" in final_content:
                 start = final_content.find("<h1>") + 4
@@ -139,7 +157,6 @@ if __name__ == "__main__":
                 post_title = final_content[start:end]
                 final_content = final_content.replace(f"<h1>{post_title}</h1>", "")
 
-            # Publish
             print(f"   -> Publishing: {post_title}")
             try:
                 post_body = {"title": post_title, "content": final_content}
