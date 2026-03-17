@@ -8,9 +8,9 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 # --- CONFIGURATION ---
-RAPIDAPI_KEY = "95be6b90f9msh643ba3b6db91b6bp177b0djsn28f5d2180410"
-BLOG_ID = "6489684370414144848"
-GEMINI_API_KEY = "AIzaSyBC8BwjP33Y077TPKU5uXCCubqx-I8i4Fw"
+RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
+BLOG_ID = os.environ.get("BLOG_ID")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 if not all([RAPIDAPI_KEY, BLOG_ID, GEMINI_API_KEY]):
     raise ValueError("Missing one or more API keys in environment variables!")
@@ -32,6 +32,37 @@ def fetch_sri_lankan_news():
     if response.status_code == 200:
         return response.json()
     return None
+
+def update_readme(new_posts):
+    """Prepends new articles to the README.md file."""
+    print(f"\n4. Updating README.md with {len(new_posts)} new articles...")
+    if not os.path.exists("README.md"):
+        print("   -> README.md not found. Skipping update.")
+        return
+
+    with open("README.md", "r", encoding="utf-8") as f:
+        content = f.read()
+
+    if "" not in content:
+        print("   -> marker not found in README.md. Skipping.")
+        return
+
+    new_md = ""
+    for post in new_posts:
+        # Format the markdown to look like a blog feed
+        new_md += f"### 🔴 [{post['title']}]({post['url']})\n"
+        if post['image']:
+            # Using HTML img tag to control the size on GitHub
+            new_md += f'<a href="{post["url"]}"><img src="{post["image"]}" width="400" style="border-radius:8px;" alt="News Image"></a>\n\n'
+        new_md += "---\n\n"
+
+    # Split the file at the start marker and inject the new markdown
+    parts = content.split("")
+    updated_content = parts[0] + "\n" + new_md + parts[1].lstrip()
+
+    with open("README.md", "w", encoding="utf-8") as f:
+        f.write(updated_content)
+    print("   -> README.md successfully updated!")
 
 def get_already_published_urls(service):
     """Fetches recent posts from Blogger and finds the hidden source URLs."""
