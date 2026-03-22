@@ -3,11 +3,12 @@ import requests
 import time
 import re
 from bs4 import BeautifulSoup
-from google import genai # --- NEW GOOGLE AI LIBRARY ---
+from google import genai 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION (SECURED) ---
+# NEVER hardcode API keys in your script. Use environment variables (e.g., in GitHub Secrets)
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
 BLOG_ID = os.environ.get("BLOG_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -107,8 +108,8 @@ def scrape_full_article_and_hd_image(url):
     except Exception as e:
         return None, None
 
-def rewrite_with_gemini_in_sinhala(original_text):
-    """Asks Gemini to rewrite the text into a fresh HTML blog post in Sinhala."""
+def rewrite_with_gemini_in_sinhala(original_text, max_retries=3):
+    """Asks Gemini to rewrite the text. Includes automatic retries for Rate Limits."""
     print("   -> Translating and rewriting article into Sinhala...")
     prompt = f"""
     You are an expert Sri Lankan news blogger. Read the following English news article and rewrite it completely in fluent, professional Sinhala. 
@@ -117,21 +118,36 @@ def rewrite_with_gemini_in_sinhala(original_text):
     3. Do NOT include any markdown formatting (like ```html). Output pure HTML only.
     Text to translate and rewrite: {original_text}
     """
-    try:
-        # --- NEW MODEL AND SYNTAX ---
-        response = client.models.generate_content(
-            model='gemini-2.5-flash-lite',
-            contents=prompt
-        )
-        html_output = response.text.strip()
-        if html_output.startswith("```html"):
-            html_output = html_output[7:-3]
-        elif html_output.startswith("```"):
-            html_output = html_output[3:-3]
-        return html_output
-    except Exception as e:
-        print(f"   -> Gemini Error: {e}")
-        return None
+    
+    # Retry Loop to handle the 429 RESOURCE_EXHAUSTED error
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model='gemini-2.5-flash-lite',
+                contents=prompt
+            )
+            html_output = response.text.strip()
+            
+            # Clean up potential markdown formatting from the response
+            if html_output.startswith("```html"):
+                html_output = html_output[7:-3]
+            elif html_output.startswith("```"):
+                html_output = html_output[3:-3]
+                
+            return html_output
+            
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "429" in error_msg or "resource_exhausted" in error_msg or "quota" in error_msg:
+                wait_time = 10 * (attempt + 1) # Wait 10s, then 20s, etc.
+                print(f"   -> ⚠️ Rate limit hit. Waiting {wait_time} seconds before trying again...")
+                time.sleep(wait_time)
+            else:
+                print(f"   -> ❌ Gemini Error: {e}")
+                return None
+                
+    print("   -> ❌ Max retries reached. Skipping this article.")
+    return None
 
 if __name__ == "__main__":
     if os.path.exists('token.json'):
@@ -197,6 +213,7 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"   -> Publishing Error: {e}")
             
-            time.sleep(5)
+            # Increased standard wait time to 15 seconds to safely bypass free-tier RPM limits
+            time.sleep(15) 
             
         print("\nPipeline finished successfully!")
